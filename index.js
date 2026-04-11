@@ -166,16 +166,16 @@ const message = `
 🔴 <b>${escapeHtml(user.display_name)}</b> EN DIRECTO
 ━━━━━━━━━━━━━━━━━━
 
-🔗 <b>Link</b>
+🔗 <b>Link:</b>
 ${url}
 
-📌 <b>Título</b>
+📌 <b>Título:</b>
 ${title}
 
-📅 <b>Fecha</b>
+📅 <b>Fecha:</b>
 ${fecha}
 
-📝 <b>Info adicional</b>
+📝 <b>Info adicional:</b>
 Comprimido
 
 Seguimos con directos a 720p
@@ -189,7 +189,7 @@ https://medibang.com/mpc/titles/3v2506130530262220027219089/
 
 
 ━━━━━━━━━━━━━━━━━━
-🏷️ <b>Tags</b>
+🏷️ <b>Tags:</b>
 ${tags}
 ━━━━━━━━━━━━━━━━━━
 `.trim();
