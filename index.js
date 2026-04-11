@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import fs from 'fs/promises';
+import path from 'path';
 import WebSocket from 'ws';
 
 const {
@@ -11,10 +13,15 @@ const {
   CHECK_DUPLICATES = 'true',
 } = process.env;
 
+let twitchAccessToken = process.env.TWITCH_USER_ACCESS_TOKEN;
+let twitchRefreshToken = process.env.TWITCH_REFRESH_TOKEN;
+
 if (
   !TWITCH_CLIENT_ID ||
   !TWITCH_USER_ACCESS_TOKEN ||
   !TWITCH_STREAMER_LOGIN ||
+  !twitchAccessToken ||
+  !twitchRefreshToken ||
   !TELEGRAM_BOT_TOKEN ||
   !TELEGRAM_CHAT_ID ||
   !TELEGRAM_THREAD_ID
@@ -37,12 +44,110 @@ function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
 }
 
+const ENV_PATH = path.resolve(process.cwd(), '.env');
+
+async function updateEnvValue(key, value) {
+  const envRaw = await fs.readFile(ENV_PATH, 'utf8');
+  const pattern = new RegExp(`^${key}=.*$`, 'm');
+
+  const nextLine = `${key}=${value}`;
+
+  let updated;
+  if (pattern.test(envRaw)) {
+    updated = envRaw.replace(pattern, nextLine);
+  } else {
+    updated = `${envRaw.trimEnd()}\n${nextLine}\n`;
+  }
+
+  await fs.writeFile(ENV_PATH, updated, 'utf8');
+}
+
+async function persistTwitchTokens(accessToken, refreshToken) {
+  twitchAccessToken = accessToken;
+  twitchRefreshToken = refreshToken;
+
+  await updateEnvValue('TWITCH_USER_ACCESS_TOKEN', accessToken);
+  await updateEnvValue('TWITCH_REFRESH_TOKEN', refreshToken);
+}
+
+async function validateTwitchAccessToken() {
+  const res = await fetch('https://id.twitch.tv/oauth2/validate', {
+    headers: {
+      Authorization: `OAuth ${twitchAccessToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  return res.json();
+}
+
+async function refreshTwitchAccessToken() {
+  log('Refrescando access token de Twitch...');
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: twitchRefreshToken,
+    client_id: TWITCH_CLIENT_ID,
+    client_secret: TWITCH_CLIENT_SECRET,
+  });
+
+  const res = await fetch('https://id.twitch.tv/oauth2/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(`No se pudo refrescar token de Twitch: ${JSON.stringify(data)}`);
+  }
+
+  if (!data.access_token || !data.refresh_token) {
+    throw new Error(`Respuesta inesperada al refrescar token: ${JSON.stringify(data)}`);
+  }
+
+  await persistTwitchTokens(data.access_token, data.refresh_token);
+
+  log(`Token de Twitch refrescado. Expira en ${data.expires_in} segundos.`);
+  return data;
+}
+
+async function ensureValidTwitchToken() {
+  const validation = await validateTwitchAccessToken();
+
+  if (!validation) {
+    log('Token inválido o vencido. Intentando refresh...');
+    await refreshTwitchAccessToken();
+    return;
+  }
+
+  if (validation.client_id !== TWITCH_CLIENT_ID) {
+    throw new Error(
+      `El token pertenece a otro client_id. Esperado=${TWITCH_CLIENT_ID} recibido=${validation.client_id}`
+    );
+  }
+
+  log(`Token válido para ${validation.login}. Expira en ${validation.expires_in} segundos.`);
+
+  // margen de seguridad: refresca si quedan menos de 10 minutos
+  if (typeof validation.expires_in === 'number' && validation.expires_in < 600) {
+    log('Token próximo a vencer. Refrescando preventivamente...');
+    await refreshTwitchAccessToken();
+  }
+}
+
 async function twitchFetch(path, options = {}) {
   const res = await fetch(`${TWITCH_API}${path}`, {
     ...options,
     headers: {
       'Client-Id': TWITCH_CLIENT_ID,
-      'Authorization': `Bearer ${TWITCH_USER_ACCESS_TOKEN}`,
+      'Authorization': `Bearer ${twitchAccessToken}`,
       'Content-Type': 'application/json',
       ...(options.headers || {}),
     },
@@ -55,6 +160,12 @@ async function twitchFetch(path, options = {}) {
     data = text ? JSON.parse(text) : null;
   } catch {
     data = text;
+  }
+
+  if (res.status === 401 && retryOnAuth) {
+    log('Twitch respondió 401. Intentando refresh automático...');
+    await refreshTwitchAccessToken();
+    return twitchFetch(path, options, false);
   }
 
   if (!res.ok) {
@@ -344,34 +455,23 @@ function connectWebSocket() {
   });
 }
 
-// async function main() {
-//   try {
-//     streamerUser = await getStreamerUserByLogin(TWITCH_STREAMER_LOGIN);
-//     log(`Monitoreando a ${streamerUser.display_name} (${streamerUser.login}) [${streamerUser.id}]`);
-
-//     // Comprobación inicial: por si ya estaba en directo antes de arrancar el bot
-//     const liveNow = await getLiveStreamByUserId(streamerUser.id);
-
-//     if (liveNow) {
-//       log('El streamer ya estaba en directo al iniciar. Enviando aviso inicial...');
-
-//       if (CHECK_DUPLICATES !== 'true' || lastNotifiedStreamId !== liveNow.id) {
-//         await sendLiveNotification(liveNow, streamerUser);
-//         lastNotifiedStreamId = liveNow.id;
-//       }
-//     } else {
-//       log('El streamer no estaba en directo al iniciar.');
-//     }
-
-//     connectWebSocket();
-//   } catch (err) {
-//     console.error('Error al iniciar:', err);
-//     process.exit(1);
-//   }
-// }
-
 async function main() {
   try {
+    await ensureValidTwitchToken();
+
+    async function refreshLoop() {
+      try {
+        await ensureValidTwitchToken();
+      } catch (err) {
+        console.error('Error en refreshLoop:', err);
+      }
+
+      // vuelve a ejecutarse en 50 minutos
+      setTimeout(refreshLoop, 50 * 60 * 1000);
+    }
+
+    setTimeout(refreshLoop, 50 * 60 * 1000);
+
     streamerUser = await getStreamerUserByLogin(TWITCH_STREAMER_LOGIN);
     log(`Monitoreando a ${streamerUser.display_name} (${streamerUser.login}) [${streamerUser.id}]`);
 
