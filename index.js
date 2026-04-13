@@ -371,6 +371,8 @@ function connectWebSocket() {
   clearHeartbeat();
 
   const targetUrl = reconnectUrl || EVENTSUB_WS_URL;
+  reconnectUrl = null;
+
   log(`Conectando a EventSub WebSocket: ${targetUrl}`);
 
   ws = new WebSocket(targetUrl);
@@ -388,7 +390,6 @@ function connectWebSocket() {
 
       if (type === 'session_welcome') {
         const session = payload.session;
-        reconnectUrl = null;
 
         log(`session_welcome recibido. session_id=${session.id}`);
 
@@ -411,11 +412,13 @@ function connectWebSocket() {
       if (type === 'session_reconnect') {
         const newUrl = payload?.session?.reconnect_url;
         log(`Twitch pidió reconexión. reconnect_url=${newUrl}`);
-        reconnectUrl = newUrl || EVENTSUB_WS_URL;
+
+        reconnectUrl = newUrl || null;
 
         try {
           ws?.close();
         } catch {}
+
         return;
       }
 
@@ -445,6 +448,10 @@ function connectWebSocket() {
   ws.on('close', (code, reason) => {
     clearHeartbeat();
     log(`WebSocket cerrado. code=${code} reason=${reason?.toString() || ''}`);
+
+    if (code === 4007) {
+      reconnectUrl = null;
+    }
 
     setTimeout(() => {
       connectWebSocket();
