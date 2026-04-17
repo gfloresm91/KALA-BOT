@@ -12,6 +12,12 @@ const {
   TELEGRAM_CHAT_ID,
   TELEGRAM_THREAD_ID,
   CHECK_DUPLICATES = 'true',
+
+  // YouTube
+  YOUTUBE_API_KEY,
+  YOUTUBE_CHANNEL_ID,
+  YOUTUBE_POLL_INTERVAL_MS = '300000',
+  YOUTUBE_NOTIFY_SHORTS = 'true',
 } = process.env;
 
 let twitchAccessToken = process.env.TWITCH_USER_ACCESS_TOKEN;
@@ -27,13 +33,16 @@ if (
   !TELEGRAM_CHAT_ID ||
   !TELEGRAM_THREAD_ID
 ) {
-  console.error('Faltan variables en .env');
+  console.error('Faltan variables de Twitch/Telegram en .env');
   process.exit(1);
 }
 
 const TWITCH_API = 'https://api.twitch.tv/helix';
 const EVENTSUB_WS_URL = 'wss://eventsub.wss.twitch.tv/ws';
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+const YOUTUBE_API = 'https://www.googleapis.com/youtube/v3';
+const STATE_PATH = path.resolve(process.cwd(), 'bot-state.json');
+const ENV_PATH = path.resolve(process.cwd(), '.env');
 
 let streamerUser = null;
 let lastNotifiedStreamId = null;
@@ -41,16 +50,59 @@ let ws = null;
 let reconnectUrl = null;
 let heartbeatTimer = null;
 
+// YouTube state
+let youtubeUploadsPlaylistId = null;
+let lastNotifiedYoutubeVideoId = null;
+let youtubePollTimer = null;
+
 function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
 }
 
-const ENV_PATH = path.resolve(process.cwd(), '.env');
+async function readState() {
+  try {
+    const raw = await fs.readFile(STATE_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+
+    return {
+      lastNotifiedStreamId: parsed.lastNotifiedStreamId || null,
+      lastNotifiedYoutubeVideoId: parsed.lastNotifiedYoutubeVideoId || null,
+    };
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return {
+        lastNotifiedStreamId: null,
+        lastNotifiedYoutubeVideoId: null,
+      };
+    }
+
+    throw err;
+  }
+}
+
+async function writeState() {
+  const data = {
+    lastNotifiedStreamId,
+    lastNotifiedYoutubeVideoId,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await fs.writeFile(STATE_PATH, JSON.stringify(data, null, 2), 'utf8');
+}
+
+async function setLastNotifiedStreamId(streamId) {
+  lastNotifiedStreamId = streamId;
+  await writeState();
+}
+
+async function setLastNotifiedYoutubeVideoId(videoId) {
+  lastNotifiedYoutubeVideoId = videoId;
+  await writeState();
+}
 
 async function updateEnvValue(key, value) {
   const envRaw = await fs.readFile(ENV_PATH, 'utf8');
   const pattern = new RegExp(`^${key}=.*$`, 'm');
-
   const nextLine = `${key}=${value}`;
 
   let updated;
@@ -136,19 +188,18 @@ async function ensureValidTwitchToken() {
 
   log(`Token válido para ${validation.login}. Expira en ${validation.expires_in} segundos.`);
 
-  // margen de seguridad: refresca si quedan menos de 10 minutos
   if (typeof validation.expires_in === 'number' && validation.expires_in < 600) {
     log('Token próximo a vencer. Refrescando preventivamente...');
     await refreshTwitchAccessToken();
   }
 }
 
-async function twitchFetch(path, options = {}) {
+async function twitchFetch(path, options = {}, retryOnAuth = true) {
   const res = await fetch(`${TWITCH_API}${path}`, {
     ...options,
     headers: {
       'Client-Id': TWITCH_CLIENT_ID,
-      'Authorization': `Bearer ${twitchAccessToken}`,
+      Authorization: `Bearer ${twitchAccessToken}`,
       'Content-Type': 'application/json',
       ...(options.headers || {}),
     },
@@ -177,18 +228,23 @@ async function twitchFetch(path, options = {}) {
 }
 
 async function telegramSendMessage(text) {
+  const payload = {
+    chat_id: TELEGRAM_CHAT_ID,
+    text,
+    parse_mode: 'HTML',
+    disable_web_page_preview: false,
+  };
+
+  if (TELEGRAM_THREAD_ID) {
+    payload.message_thread_id = Number(TELEGRAM_THREAD_ID);
+  }
+
   const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
-      message_thread_id: Number(TELEGRAM_THREAD_ID),
-      text,
-      parse_mode: 'HTML',
-      disable_web_page_preview: false,
-    }),
+    body: JSON.stringify(payload),
   });
 
   const data = await res.json();
@@ -245,18 +301,6 @@ async function subscribeToStreamOnline(sessionId, broadcasterUserId) {
 
 async function sendLiveNotification(stream, user) {
   const title = escapeHtml(stream.title || 'Sin título');
-  const game = escapeHtml(stream.game_name || 'Sin categoría');
-  const viewers = typeof stream.viewer_count === 'number'
-    ? stream.viewer_count.toLocaleString('es-CL')
-    : 'N/D';
-  const startedAt = stream.started_at ? new Date(stream.started_at) : null;
-  const startedText = startedAt
-    ? startedAt.toLocaleString('es-CL', {
-        dateStyle: 'short',
-        timeStyle: 'short',
-      })
-    : 'N/D';
-
   const url = `https://twitch.tv/${user.login}`;
 
   const fechaObj = new Date(stream.started_at);
@@ -264,8 +308,8 @@ async function sendLiveNotification(stream, user) {
   const fecha = `${String(fechaObj.getDate()).padStart(2, '0')}-${String(fechaObj.getMonth() + 1).padStart(2, '0')}-${fechaObj.getFullYear()}`;
 
   const meses = [
-    'Enero','Febrero','Marzo','Abril','Mayo','Junio',
-    'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'
+    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
   ];
 
   const mes = meses[fechaObj.getMonth()];
@@ -273,7 +317,7 @@ async function sendLiveNotification(stream, user) {
 
   const tags = `#${año} #${mes} #`;
 
-const message = `
+  const message = `
 ━━━━━━━━━━━━━━━━━━
 🔴 <b>${escapeHtml(user.display_name)}</b> EN DIRECTO
 ━━━━━━━━━━━━━━━━━━
@@ -290,8 +334,6 @@ ${fecha}
 📝 <b>Info adicional:</b>
 Comprimido
 
-Seguimos con directos a 720p
-
 Directos a las 21 horas española
 
 Spacedrum en mangaplus, denle cariño 😼
@@ -307,7 +349,7 @@ ${tags}
 `.trim();
 
   await telegramSendMessage(message);
-  log('Aviso enviado a Telegram.');
+  log('Aviso de Twitch enviado a Telegram.');
 }
 
 async function handleStreamOnlineEvent(event) {
@@ -331,7 +373,7 @@ async function handleStreamOnlineEvent(event) {
         }
 
         await sendLiveNotification(retryLive, streamerUser);
-        lastNotifiedStreamId = retryLive.id;
+        await setLastNotifiedStreamId(retryLive.id);
       } catch (err) {
         console.error('Error en reintento:', err);
       }
@@ -346,7 +388,7 @@ async function handleStreamOnlineEvent(event) {
   }
 
   await sendLiveNotification(live, streamerUser);
-  lastNotifiedStreamId = live.id;
+  await setLastNotifiedStreamId(live.id);
 }
 
 function clearHeartbeat() {
@@ -463,8 +505,193 @@ function connectWebSocket() {
   });
 }
 
+/* =========================
+   YOUTUBE
+========================= */
+
+function isYouTubeEnabled() {
+  return Boolean(YOUTUBE_API_KEY && YOUTUBE_CHANNEL_ID);
+}
+
+async function youtubeFetch(apiPath, params = {}) {
+  const url = new URL(`${YOUTUBE_API}${apiPath}`);
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(key, String(value));
+    }
+  }
+
+  url.searchParams.set('key', YOUTUBE_API_KEY);
+
+  const res = await fetch(url);
+  const text = await res.text();
+
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!res.ok) {
+    throw new Error(`YouTube API ${res.status}: ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
+async function getYouTubeUploadsPlaylistId(channelId) {
+  const data = await youtubeFetch('/channels', {
+    part: 'contentDetails,snippet',
+    id: channelId,
+    maxResults: 1,
+  });
+
+  const channel = data?.items?.[0];
+  if (!channel) {
+    throw new Error(`No encontré el canal de YouTube: ${channelId}`);
+  }
+
+  return {
+    uploadsPlaylistId: channel.contentDetails.relatedPlaylists.uploads,
+    channelTitle: channel.snippet.title,
+  };
+}
+
+async function getLatestYouTubeUpload(uploadsPlaylistId) {
+  const data = await youtubeFetch('/playlistItems', {
+    part: 'snippet,contentDetails',
+    playlistId: uploadsPlaylistId,
+    maxResults: 1,
+  });
+
+  const item = data?.items?.[0];
+  if (!item) {
+    return null;
+  }
+
+  const videoId = item?.snippet?.resourceId?.videoId;
+  if (!videoId) {
+    return null;
+  }
+
+  return {
+    videoId,
+    title: item.snippet.title || 'Sin título',
+    channelTitle: item.snippet.channelTitle || 'Canal',
+    publishedAt: item.contentDetails?.videoPublishedAt || item.snippet?.publishedAt || null,
+    description: item.snippet.description || '',
+    url: `https://www.youtube.com/watch?v=${videoId}`,
+  };
+}
+
+function looksLikeShort(video) {
+  const title = String(video?.title || '').toLowerCase();
+  const description = String(video?.description || '').toLowerCase();
+
+  return title.includes('#shorts') || description.includes('#shorts');
+}
+
+async function sendYouTubeNotification(video) {
+  const fechaObj = video.publishedAt ? new Date(video.publishedAt) : null;
+  const fecha = fechaObj && !Number.isNaN(fechaObj.getTime())
+    ? `${String(fechaObj.getDate()).padStart(2, '0')}-${String(fechaObj.getMonth() + 1).padStart(2, '0')}-${fechaObj.getFullYear()}`
+    : 'N/D';
+
+  const message = `
+━━━━━━━━━━━━━━━━━━
+📺 <b>${escapeHtml(video.channelTitle)}</b> SUBIÓ VIDEO NUEVO
+━━━━━━━━━━━━━━━━━━
+
+🔗 <b>Link:</b>
+${video.url}
+
+📌 <b>Título:</b>
+${escapeHtml(video.title)}
+
+📅 <b>Fecha:</b>
+${fecha}
+━━━━━━━━━━━━━━━━━━
+`.trim();
+
+  await telegramSendMessage(message);
+  log('Aviso de YouTube enviado a Telegram.');
+}
+
+async function checkLatestYouTubeVideo({ initial = false } = {}) {
+  if (!isYouTubeEnabled()) {
+    return;
+  }
+
+  if (!youtubeUploadsPlaylistId) {
+    const info = await getYouTubeUploadsPlaylistId(YOUTUBE_CHANNEL_ID);
+    youtubeUploadsPlaylistId = info.uploadsPlaylistId;
+    log(`YouTube monitoreando canal: ${info.channelTitle} | uploads playlist: ${youtubeUploadsPlaylistId}`);
+  }
+
+  const latestVideo = await getLatestYouTubeUpload(youtubeUploadsPlaylistId);
+
+  if (!latestVideo) {
+    log('YouTube: no se encontró video reciente.');
+    return;
+  }
+
+  if (YOUTUBE_NOTIFY_SHORTS !== 'true' && looksLikeShort(latestVideo)) {
+    log(`YouTube: el último contenido parece Short y YOUTUBE_NOTIFY_SHORTS=false. Video ${latestVideo.videoId}`);
+    if (!lastNotifiedYoutubeVideoId) {
+      await setLastNotifiedYoutubeVideoId(latestVideo.videoId);
+    }
+    return;
+  }
+
+  if (!lastNotifiedYoutubeVideoId) {
+    await setLastNotifiedYoutubeVideoId(latestVideo.videoId);
+    log(`YouTube: estado inicial fijado con video ${latestVideo.videoId}${initial ? ' (sin notificar)' : ''}`);
+    return;
+  }
+
+  if (lastNotifiedYoutubeVideoId === latestVideo.videoId) {
+    log(`YouTube: sin novedades. Último video sigue siendo ${latestVideo.videoId}`);
+    return;
+  }
+
+  await sendYouTubeNotification(latestVideo);
+  await setLastNotifiedYoutubeVideoId(latestVideo.videoId);
+}
+
+function scheduleYouTubePolling() {
+  if (!isYouTubeEnabled()) {
+    log('YouTube deshabilitado: faltan YOUTUBE_API_KEY o YOUTUBE_CHANNEL_ID');
+    return;
+  }
+
+  const intervalMs = Number(YOUTUBE_POLL_INTERVAL_MS) || 300000;
+
+  async function run() {
+    try {
+      await checkLatestYouTubeVideo();
+    } catch (err) {
+      console.error('Error revisando YouTube:', err);
+    } finally {
+      youtubePollTimer = setTimeout(run, intervalMs);
+    }
+  }
+
+  youtubePollTimer = setTimeout(run, intervalMs);
+  log(`YouTube polling activado cada ${intervalMs} ms.`);
+}
+
 async function main() {
   try {
+    const savedState = await readState();
+    lastNotifiedStreamId = savedState.lastNotifiedStreamId;
+    lastNotifiedYoutubeVideoId = savedState.lastNotifiedYoutubeVideoId;
+
+    log(
+      `Estado cargado | Twitch streamId=${lastNotifiedStreamId || 'null'} | YouTube videoId=${lastNotifiedYoutubeVideoId || 'null'}`
+    );
+
     await ensureValidTwitchToken();
 
     async function refreshLoop() {
@@ -474,14 +701,13 @@ async function main() {
         console.error('Error en refreshLoop:', err);
       }
 
-      // vuelve a ejecutarse en 50 minutos
       setTimeout(refreshLoop, 50 * 60 * 1000);
     }
 
     setTimeout(refreshLoop, 50 * 60 * 1000);
 
     streamerUser = await getStreamerUserByLogin(TWITCH_STREAMER_LOGIN);
-    log(`Monitoreando a ${streamerUser.display_name} (${streamerUser.login}) [${streamerUser.id}]`);
+    log(`Monitoreando Twitch a ${streamerUser.display_name} (${streamerUser.login}) [${streamerUser.id}]`);
 
     connectWebSocket();
 
@@ -494,7 +720,7 @@ async function main() {
 
           if (CHECK_DUPLICATES !== 'true' || lastNotifiedStreamId !== liveNow.id) {
             await sendLiveNotification(liveNow, streamerUser);
-            lastNotifiedStreamId = liveNow.id;
+            await setLastNotifiedStreamId(liveNow.id);
           }
         } else {
           log('Comprobación inicial: el streamer no estaba en directo.');
@@ -503,6 +729,17 @@ async function main() {
         console.error('Error en comprobación inicial:', err);
       }
     }, 2000);
+
+    if (isYouTubeEnabled()) {
+      try {
+        await checkLatestYouTubeVideo({ initial: true });
+        scheduleYouTubePolling();
+      } catch (err) {
+        console.error('Error iniciando monitoreo de YouTube:', err);
+      }
+    } else {
+      log('YouTube no configurado. Si quieres activarlo, agrega YOUTUBE_API_KEY y YOUTUBE_CHANNEL_ID al .env');
+    }
   } catch (err) {
     console.error('Error al iniciar:', err);
     process.exit(1);
