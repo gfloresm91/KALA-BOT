@@ -1,0 +1,13 @@
+━━━━━━━━━━━━━━━━━━
+🗓️ <b>{{DISPLAY_NAME}}</b> TIENE DIRECTO PROGRAMADO
+━━━━━━━━━━━━━━━━━━
+
+🔗 <b>Canal:</b>
+{{URL}}
+
+📌 <b>Título:</b>
+{{TITLE}}
+
+🕒 <b>Inicio:</b>
+{{START_TIME}}
+━━━━━━━━━━━━━━━━━━

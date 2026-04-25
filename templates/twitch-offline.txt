@@ -1,0 +1,10 @@
+━━━━━━━━━━━━━━━━━━
+⚫ <b>{{DISPLAY_NAME}}</b> TERMINÓ DIRECTO
+━━━━━━━━━━━━━━━━━━
+
+🔗 <b>Canal:</b>
+{{URL}}
+
+⏱️ <b>Duración aproximada:</b>
+{{DURATION}}
+━━━━━━━━━━━━━━━━━━

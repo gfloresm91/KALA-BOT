@@ -1,0 +1,23 @@
+━━━━━━━━━━━━━━━━━━
+🔴 <b>{{DISPLAY_NAME}}</b> EN DIRECTO
+━━━━━━━━━━━━━━━━━━
+
+🔗 <b>Link:</b>
+{{URL}}
+
+📌 <b>Título:</b>
+{{TITLE}}
+
+📅 <b>Fecha:</b>
+{{DATE}}
+
+📝 <b>Info adicional:</b>
+{{EXTRA_INFO}}
+
+🌐 <b>Otras fuentes:</b>
+{{OTHER_SOURCES}}
+
+━━━━━━━━━━━━━━━━━━
+🏷️ <b>Tags:</b>
+{{TAGS}}
+━━━━━━━━━━━━━━━━━━

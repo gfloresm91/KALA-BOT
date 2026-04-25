@@ -1,9 +1,11 @@
 {
   "name": "kala-bot",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "main": "index.js",
   "scripts": {
+    "check": "node --check index.js && node --check healthcheck.js && node --check src/*.js",
+    "health": "node healthcheck.js",
     "start": "node index.js"
   },
   "dependencies": {

@@ -1,0 +1,13 @@
+━━━━━━━━━━━━━━━━━━
+▶️ <b>{{CHANNEL_TITLE}}</b> SUBIÓ {{CONTENT_TYPE_LABEL}} NUEVO
+━━━━━━━━━━━━━━━━━━
+
+🔗 <b>Link:</b>
+{{URL}}
+
+📌 <b>Título:</b>
+{{TITLE}}
+
+📅 <b>Fecha:</b>
+{{DATE}}
+━━━━━━━━━━━━━━━━━━
