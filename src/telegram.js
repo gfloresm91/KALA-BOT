@@ -1,13 +1,22 @@
 import { escapeHtml } from './utils.js';
 
 export class TelegramClient {
-  constructor({ botToken, chatId, threadId }) {
+  constructor({ botToken, chatId, threadId, techThreadId }) {
     this.chatId = chatId;
     this.threadId = threadId;
+    this.techThreadId = techThreadId;
     this.api = `https://api.telegram.org/bot${botToken}`;
   }
 
   async sendMessage(text, options = {}) {
+    // "technical" usa el topic dedicado si esta configurado; si no, cae en
+    // el mismo topic de siempre. Todo lo que no pase audience (live/offline/
+    // schedule/youtube) sigue siendo "public" por default.
+    const audience = options.audience ?? 'public';
+    const threadId = audience === 'technical' && this.techThreadId
+      ? this.techThreadId
+      : this.threadId;
+
     const payload = {
       chat_id: this.chatId,
       text,
@@ -15,8 +24,8 @@ export class TelegramClient {
       disable_web_page_preview: options.disableWebPagePreview ?? false,
     };
 
-    if (this.threadId) {
-      payload.message_thread_id = Number(this.threadId);
+    if (threadId) {
+      payload.message_thread_id = Number(threadId);
     }
 
     const res = await fetch(`${this.api}/sendMessage`, {
@@ -39,6 +48,7 @@ export class TelegramClient {
   async sendLifecycle(message) {
     return this.sendMessage(`🤖 <b>Kala Bot</b>\n${escapeHtml(message)}`, {
       disableWebPagePreview: true,
+      audience: 'technical',
     });
   }
 
@@ -46,6 +56,7 @@ export class TelegramClient {
     const message = err instanceof Error ? err.message : String(err);
     return this.sendMessage(`⚠️ <b>${escapeHtml(context)}</b>\n${escapeHtml(message)}`, {
       disableWebPagePreview: true,
+      audience: 'technical',
     });
   }
 }

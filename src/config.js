@@ -46,6 +46,9 @@ export const config = {
     botToken: process.env.TELEGRAM_BOT_TOKEN,
     chatId: process.env.TELEGRAM_CHAT_ID,
     threadId: process.env.TELEGRAM_THREAD_ID,
+    // Topic separado (opcional) para avisos tecnicos (lifecycle/errores). Si
+    // no se configura, caen en el mismo topic de siempre.
+    techThreadId: process.env.TELEGRAM_TECH_THREAD_ID,
     notifyLifecycle: bool(process.env.TELEGRAM_NOTIFY_LIFECYCLE, false),
     notifyErrors: bool(process.env.TELEGRAM_NOTIFY_ERRORS, true),
   },

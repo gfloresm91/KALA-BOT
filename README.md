@@ -100,6 +100,7 @@ YOUTUBE_NOTIFY_SHORTS=true
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 TELEGRAM_THREAD_ID=
+TELEGRAM_TECH_THREAD_ID=
 TELEGRAM_NOTIFY_LIFECYCLE=false
 TELEGRAM_NOTIFY_ERRORS=true
 
@@ -138,6 +139,7 @@ Para múltiples streamers o canales, usa las variables en plural separadas por c
 | `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram. |
 | `TELEGRAM_CHAT_ID` | Chat o grupo destino. |
 | `TELEGRAM_THREAD_ID` | Topic/hilo destino dentro del grupo. |
+| `TELEGRAM_TECH_THREAD_ID` | Topic separado opcional para avisos técnicos (`sendLifecycle`/`sendError`). Si se omite, esos avisos usan `TELEGRAM_THREAD_ID` igual que el resto. |
 | `TELEGRAM_NOTIFY_LIFECYCLE` | Envía avisos al iniciar o apagar el bot. |
 | `TELEGRAM_NOTIFY_ERRORS` | Envía avisos de errores críticos. |
 | `HEALTH_WRITE_INTERVAL_MS` | Frecuencia con la que se actualiza `bot-health.json`. |
